@@ -22,6 +22,7 @@ struct Sphere {
   Vec3 center;
   int radius;
   Color color;
+  int specular;
 };
 
 enum LightType {
@@ -43,14 +44,25 @@ Light lights[3] = {
 	{LightType::directional, 0.2, {0, 0, 0}, {1, 4, 4}}
 };
 
-Sphere spheres[4] = {{{0, -1, 3}, 1, {255, 0, 0}}, // red
-                    {{2, 0, 4}, 1, {0, 0, 255}}, // blue
-   									{{-2, 0, 4}, 1, {0, 255, 0}}, // green
-                    {{0, -5001, 0}, 5000, {255, 255, 0}}};
+Sphere spheres[4] = {{{0, -1, 3}, 1, {255, 0, 0}, 500}, // red
+                    {{2, 0, 4}, 1, {0, 0, 255}, 500}, // blue
+   									{{-2, 0, 4}, 1, {0, 255, 0}, 10}, // green
+                    {{0, -5001, 0}, 5000, {255, 255, 0}, 1000}};
 
 Vec3 CanvasToViewport(float x, float y) {
   return {x * VIEWPORT_SIZE / WINDOW_WIDTH, y * VIEWPORT_SIZE / WINDOW_WIDTH,
           PROJECTION_PLANE_Z};
+}
+
+Color Clamp(Color color) {
+	Color clamped = color;
+	if (clamped.r > 255)
+		clamped.r = 255;
+	if (clamped.g > 255)
+		clamped.g = 255;
+	if (clamped.b > 255)
+		clamped.b = 255;
+	return clamped;
 }
 
 float DotProduct(Vec3 v1, Vec3 v2) {
@@ -103,7 +115,7 @@ std::pair<float, float> IntersectRaySphere(Vec3 origin, Vec3 direction,
   return std::make_pair(t1, t2);
 }
 
-float ComputeLightning(Vec3 point, Vec3 normal)
+float ComputeLightning(Vec3 point, Vec3 normal, Vec3 viewing_direction, int specularity)
 {
 	float intensity = 0.0;
     float normal_length = Length(normal);
@@ -122,9 +134,22 @@ float ComputeLightning(Vec3 point, Vec3 normal)
 			else
 				direction = Subtract(light.position, point);
 
-				  float angle = DotProduct(normal, direction);
-				  if (angle > 0)
-				  	intensity += (light.intensity*angle) / (normal_length*Length(direction));
+			// diffuse lighting
+		  float angle = DotProduct(normal, direction);
+		  if (angle > 0)
+		  	intensity += (light.intensity*angle) / (normal_length*Length(direction));
+
+		  // specular - how much light is reflected back to viewer?
+		  if (specularity > -1) {
+		  	Vec3 vec_r = Subtract((2 * DotProduct(normal, direction)) * normal, direction);
+		  	float r_dot_v = DotProduct(vec_r, viewing_direction);
+		  	if (r_dot_v > 0) {
+		  		intensity += light.intensity * pow(r_dot_v / (Length(vec_r) * Length(viewing_direction)), specularity);
+		  	}
+		  }
+
+
+
 		}
 	}
 	return intensity;
@@ -155,8 +180,7 @@ Color TraceRay(Vec3 origin, Vec3 direction, int min_t, int max_t) {
   // normal vector should be based on unit of 1.
   normal = normal * (1 / Length(normal));
 
-  float intensity = ComputeLightning(point, normal);
-
+  float intensity = ComputeLightning(point, normal, direction * -1, closest_sphere->specular);
   return closest_sphere->color * intensity;
 }
 
@@ -178,7 +202,7 @@ int main() {
   for (int x = -HALF_CANVAS; x < HALF_CANVAS; ++x) {
     for (int y = -HALF_CANVAS; y < HALF_CANVAS; ++y) {
     auto direction = CanvasToViewport(x, y);
-		  auto color = TraceRay(camera_position, direction, 1, INF /* Inf ? */);
+		  auto color = Clamp(TraceRay(camera_position, direction, 1, INF /* Inf ? */));
 		  SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, 255);
 
 		  int screen_x = x + HALF_CANVAS;
