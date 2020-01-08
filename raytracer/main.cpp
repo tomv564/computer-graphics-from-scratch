@@ -76,6 +76,16 @@ Vec3 Subtract(Vec3 v1, Vec3 v2) {
 
 Vec3 Add(Vec3 v1, Vec3 v2) { return {v1.x + v2.x, v1.y + v2.y, v1.z + v2.z}; }
 
+
+Vec3 MatrixTransform(Vec3 vec, float matrix[3][3])
+{
+	Vec3 transformed;
+	transformed.x += vec.x * matrix[0][0] + vec.y * matrix[0][1] + vec.z * matrix[0][2];
+	transformed.y += vec.x * matrix[1][0] + vec.y * matrix[1][1] + vec.z * matrix[1][2];
+	transformed.z += vec.x * matrix[2][0] + vec.y * matrix[2][1] + vec.z * matrix[2][2];
+	return transformed;
+}
+
 float Length(Vec3 vec) { return sqrt(DotProduct(vec, vec)); }
 
 Vec3 operator*(Vec3 vec, float factor) {
@@ -222,7 +232,14 @@ int main() {
   SDL_Renderer *renderer;
   SDL_Event event;
 
-  Vec3 camera_position = {0, 0, 0};
+  // Vec3 camera_position = {0, 0, 0};
+  // Vec3 camera_rotation = {}
+
+	Vec3 camera_position = {3, 0, 1};
+
+	float camera_rotation[3][3] = {{0.7071, 0, -0.7071},
+		       {     0, 1,       0},
+		       {0.7071, 0,  0.7071}};
 
   SDL_Init(SDL_INIT_VIDEO);
   SDL_CreateWindowAndRenderer(WINDOW_WIDTH, WINDOW_WIDTH, 0, &window,
@@ -233,7 +250,7 @@ int main() {
 
   for (int x = -HALF_CANVAS; x < HALF_CANVAS; ++x) {
     for (int y = -HALF_CANVAS; y < HALF_CANVAS; ++y) {
-      auto direction = CanvasToViewport(x, y);
+      auto direction = MatrixTransform(CanvasToViewport(x, y), camera_rotation);
       auto color =
           Clamp(TraceRay(camera_position, direction, 1, INF, MAX_DEPTH));
       SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, 255);
