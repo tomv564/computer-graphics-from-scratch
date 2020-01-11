@@ -51,6 +51,16 @@ impl Triangle {
 	}
 }
 
+struct Model {
+	vertexes: Vec<Point3D>,
+	triangles: Vec<Triangle>
+}
+
+struct Instance<'a> {
+	model: &'a Model,
+	position: Point3D
+}
+
 fn put_pixel(canvas: &render::Canvas<video::Window>, x: i32, y: i32, color: pixels::Color) {
 	let canvas_x = x + HALF_CANVAS;
 	let canvas_y = HALF_CANVAS - y - 1;
@@ -113,14 +123,28 @@ fn draw_line(canvas: &render::Canvas<video::Window>, mut p0: rect::Point , mut p
 	}
 }
 
-fn render_triangle(canvas: &render::Canvas<video::Window>, triangle: Triangle, projected: &Vec<rect::Point>) {
+fn render_triangle(canvas: &render::Canvas<video::Window>, triangle: &Triangle, projected: &Vec<rect::Point>) {
 	draw_wireframe_triangle(canvas, projected[triangle.vertex1_idx], projected[triangle.vertex2_idx], projected[triangle.vertex3_idx], triangle.color);
 }
 
-fn render_object(canvas: &render::Canvas<video::Window>, vertexes: &Vec<Point3D>, triangles: Vec<Triangle>) -> () {
-	let projected = vertexes.iter().map(|v| project_vertex(v)).collect();
-	for t in triangles {
+fn render_instance(canvas: &render::Canvas<video::Window>, instance: Instance) -> () {
+	let model = instance.model;
+	let pos = instance.position;
+
+	let projected = instance.model.vertexes.iter().map(|v| {
+		let positioned = Point3D::new(v.x + pos.x, v.y + pos.y, v.z + pos.z);
+		project_vertex(&positioned)
+	}).collect();
+
+
+	for t in &model.triangles {
 		render_triangle(canvas, t, &projected);
+	}
+}
+
+fn render_scene(canvas: &render::Canvas<video::Window>, instances: Vec<Instance>) -> () {
+	for i in instances {
+		render_instance(canvas, i);
 	}
 }
 
@@ -138,7 +162,7 @@ fn main() -> Result<(), String> {
     canvas.set_draw_color(pixels::Color::RGB(0, 0, 0));
     canvas.clear();
 
-    let mut vertices = vec![
+    let mut vertexes = vec![
     	Point3D::new(1.0, 1.0, 1.0),
     	Point3D::new(-1.0, 1.0, 1.0),
     	Point3D::new(-1.0, -1.0, 1.0),
@@ -172,12 +196,23 @@ fn main() -> Result<(), String> {
 		Triangle::new(2, 7, 3, cyan),
 	];
 
-	for v in &mut vertices {
-		v.x -= 1.5;
-		v.z += 7.0;
-	}
+	let cube = Model {
+		vertexes: vertexes,
+		triangles: triangles
+	};
 
-	render_object(&canvas, &vertices, triangles);
+	let cube1 = Instance {
+		model: &cube,
+		position: Point3D::new(-1.5, 0.0, 7.0)
+	};
+
+	let cube2 = Instance {
+		model: &cube,
+		position: Point3D::new(1.25, 2.0, 7.5)
+	};
+
+	render_scene(&canvas, vec![cube1, cube2]);
+
 
     canvas.present();
 
