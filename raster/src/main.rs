@@ -31,7 +31,24 @@ impl Point3D {
     pub fn new(x: f32, y: f32, z: f32) -> Point3D {
     	return Point3D {x: x, y: y, z: z};
     }
+}
 
+struct Triangle {
+	pub vertex1_idx: usize,
+	pub vertex2_idx: usize,
+	pub vertex3_idx: usize,
+	pub color: pixels::Color
+}
+
+impl Triangle {
+	pub fn new(v1: usize, v2: usize, v3: usize, color: pixels::Color) -> Triangle {
+		return Triangle {
+			vertex1_idx: v1,
+			vertex2_idx: v2,
+			vertex3_idx: v3,
+			color: color
+		}
+	}
 }
 
 fn put_pixel(canvas: &render::Canvas<video::Window>, x: i32, y: i32, color: pixels::Color) {
@@ -51,57 +68,6 @@ fn interpolate(i0: i32, d0: f32, i1: i32, d1: f32) -> Vec<f32> {
 	return values;
 }
 
-// fn draw_shaded_triangle(canvas: &render::Canvas<video::Window>, pt0: Pt, pt1: Pt, pt2: Pt, color: pixels::Color) {
-// 	let Pt { point: mut p0, h: h0 } = pt0;
-// 	let Pt { point: mut p1, h: h1 } = pt1;
-// 	let Pt { point: mut p2, h: h2 } = pt2;
-
-// 	// make p0 the lowest and p2 the highest point.
-// 	if p1.y() < p0.y() { std::mem::swap(& mut p1, & mut p0); }
-// 	if p2.y() < p0.y() { std::mem::swap(& mut p2, & mut p0); }
-// 	if p2.y() < p1.y() { std::mem::swap(& mut p2, & mut p1); }
-
-
-// 	// get horizontal points for each side
-// 	let x01 = interpolate(p0.y(), p0.x() as f32, p1.y(), p1.x() as f32);
-// 	let h01 = interpolate(p0.y(), h0, p1.y(), h1);
-
-// 	let x12 = interpolate(p1.y(), p1.x() as f32, p2.y(), p2.x() as f32);
-// 	let h12 = interpolate(p1.y(), h1, p2.y(), h2);
-
-// 	let x02 = interpolate(p0.y(), p0.x() as f32, p2.y(), p2.x() as f32);
-// 	let h02 = interpolate(p0.y(), h0, p2.y(), h2);
-
-// 	// two sides are x02 and (x01+x12)
-// 	let x012 = [&x01[..], &x12[..]].concat();
-// 	let h012 = [&h01[..], &h12[..]].concat();
-// 	// remove duplicate y
-// 	// x02.pop();
-
-// 	// figure out which side is left
-// 	let mut x_left = x012;
-// 	let mut x_right = x02;
-// 	let mut h_left = h012;
-// 	let mut h_right = h02;
-// 	let m = x_right.len() / 2;
-// 	if x_right[m] < x_left[m] {
-// 		std::mem::swap(& mut x_left, & mut x_right);
-// 		std::mem::swap(& mut h_left, & mut h_right);
-// 	}
-
-// 	for y in p0.y()..p2.y() {
-// 		let y_index = (y - p0.y()) as usize;
-// 		let x_l = x_left[y_index] as i32;
-// 		let x_r = x_right[y_index] as i32;
-// 		let h_segment = interpolate(x_l, h_left[y_index], x_r, h_right[y_index]);
-// 		for x in x_l .. x_r {
-// 			let shaded_color = multiply_color(color, h_segment[(x - x_l) as usize]);
-// 			put_pixel(canvas, x, y, shaded_color);
-// 		}
-// 	}
-
-// }
-
 fn multiply_color(color: pixels::Color, factor: f32) -> pixels::Color {
 	return pixels::Color::RGB((color.r as f32 * factor) as u8, (color.g as f32 * factor) as u8, (color.b as f32 * factor) as u8);
 }
@@ -112,7 +78,7 @@ fn viewport_to_canvas(x: f32, y: f32) -> rect::Point {
 	return rect::Point::new(canvas_x, canvas_y);
 }
 
-fn project_vertex(v: Point3D) -> rect::Point {
+fn project_vertex(v: &Point3D) -> rect::Point {
 	return viewport_to_canvas(v.x * VIEWPORT_DEPTH / v.z, v.y * VIEWPORT_DEPTH / v.z);
 }
 
@@ -147,6 +113,17 @@ fn draw_line(canvas: &render::Canvas<video::Window>, mut p0: rect::Point , mut p
 	}
 }
 
+fn render_triangle(canvas: &render::Canvas<video::Window>, triangle: Triangle, projected: &Vec<rect::Point>) {
+	draw_wireframe_triangle(canvas, projected[triangle.vertex1_idx], projected[triangle.vertex2_idx], projected[triangle.vertex3_idx], triangle.color);
+}
+
+fn render_object(canvas: &render::Canvas<video::Window>, vertexes: &Vec<Point3D>, triangles: Vec<Triangle>) -> () {
+	let projected = vertexes.iter().map(|v| project_vertex(v)).collect();
+	for t in triangles {
+		render_triangle(canvas, t, &projected);
+	}
+}
+
 fn main() -> Result<(), String> {
     let sdl_context = sdl2::init()?;
     let video_subsys = sdl_context.video()?;
@@ -161,39 +138,46 @@ fn main() -> Result<(), String> {
     canvas.set_draw_color(pixels::Color::RGB(0, 0, 0));
     canvas.clear();
 
-	let vAf = Point3D::new(-2.0, -0.5, 5.0);
-	let vBf = Point3D::new(-2.0, 0.5, 5.0);
-	let vCf = Point3D::new(-1.0, 0.5, 5.0);
-	let vDf = Point3D::new(-1.0, -0.5, 5.0);
-
-	let vAb = Point3D::new(-2.0, -0.5, 6.0);
-	let vBb = Point3D::new(-2.0, 0.5, 6.0);
-	let vCb = Point3D::new(-1.0, 0.5, 6.0);
-	let vDb = Point3D::new(-1.0, -0.5, 6.0);
+    let mut vertices = vec![
+    	Point3D::new(1.0, 1.0, 1.0),
+    	Point3D::new(-1.0, 1.0, 1.0),
+    	Point3D::new(-1.0, -1.0, 1.0),
+    	Point3D::new(1.0, -1.0, 1.0),
+    	Point3D::new(1.0, 1.0, -1.0),
+    	Point3D::new(-1.0, 1.0, -1.0),
+    	Point3D::new(-1.0, -1.0, -1.0),
+    	Point3D::new(1.0, -1.0, -1.0)
+    ];
 
 	let white = pixels::Color::RGB(255, 255, 255);
+	let red = pixels::Color::RGB(255, 0, 0);
 	let green = pixels::Color::RGB(0, 255, 0);
 	let blue = pixels::Color::RGB(0, 0, 255);
-	let red = pixels::Color::RGB(255, 0, 0);
+	let yellow = pixels::Color::RGB(255, 255, 0);
+	let purple = pixels::Color::RGB(255, 0, 255);
+	let cyan = pixels::Color::RGB(0, 255, 255);
 
-    // draw_line(&canvas, rect::Point::new(-50, -200), rect::Point::new(60, 240), pixels::Color::RGB(255, 255, 255));
-    // draw_shaded_triangle(&canvas, pt0, pt1, pt2, green);
-    // draw_wireframe_triangle(&canvas, p0, p1, p2, white);
-    draw_line(&canvas, project_vertex(vAf), project_vertex(vBf), blue);
-    draw_line(&canvas, project_vertex(vBf), project_vertex(vCf), blue);
-    draw_line(&canvas, project_vertex(vCf), project_vertex(vDf), blue);
-    draw_line(&canvas, project_vertex(vDf), project_vertex(vAf), blue);
+	let triangles = vec![
+		Triangle::new(0, 1, 2, red),
+		Triangle::new(0, 2, 3, red),
+		Triangle::new(4, 0, 3, green),
+		Triangle::new(4, 3, 7, green),
+		Triangle::new(5, 4, 7, blue),
+		Triangle::new(5, 7, 6, blue),
+		Triangle::new(1, 5, 6, yellow),
+		Triangle::new(1, 6, 2, yellow),
+		Triangle::new(4, 5, 1, purple),
+		Triangle::new(4, 1, 0, purple),
+		Triangle::new(2, 6, 7, cyan),
+		Triangle::new(2, 7, 3, cyan),
+	];
 
-    draw_line(&canvas, project_vertex(vAb), project_vertex(vBb), red);
-    draw_line(&canvas, project_vertex(vBb), project_vertex(vCb), red);
-    draw_line(&canvas, project_vertex(vCb), project_vertex(vDb), red);
-    draw_line(&canvas, project_vertex(vDb), project_vertex(vAb), red);
+	for v in &mut vertices {
+		v.x -= 1.5;
+		v.z += 7.0;
+	}
 
-    draw_line(&canvas, project_vertex(vAf), project_vertex(vAb), green);
-    draw_line(&canvas, project_vertex(vBf), project_vertex(vBb), green);
-    draw_line(&canvas, project_vertex(vCf), project_vertex(vCb), green);
-    draw_line(&canvas, project_vertex(vDf), project_vertex(vDb), green);
-
+	render_object(&canvas, &vertices, triangles);
 
     canvas.present();
 
