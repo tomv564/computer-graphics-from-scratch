@@ -1,12 +1,12 @@
 extern crate sdl2;
 
 use sdl2::event::Event;
+use sdl2::gfx::primitives::DrawRenderer;
+use sdl2::keyboard::Keycode;
 use sdl2::pixels;
 use sdl2::rect;
-use sdl2::keyboard::Keycode;
 use sdl2::render;
 use sdl2::video;
-use sdl2::gfx::primitives::DrawRenderer;
 
 const SCREEN_WIDTH: i32 = 600;
 const SCREEN_HEIGHT: i32 = 600;
@@ -16,8 +16,8 @@ const VIEWPORT_HEIGHT: f32 = 1.0;
 const VIEWPORT_DEPTH: f32 = 1.0;
 
 struct Pt {
-	point: rect::Point,
-	h: f32
+    point: rect::Point,
+    h: f32,
 }
 
 #[derive(Copy, Clone)]
@@ -29,129 +29,209 @@ struct Point3D {
 
 impl Point3D {
     pub fn new(x: f32, y: f32, z: f32) -> Point3D {
-    	return Point3D {x: x, y: y, z: z};
+        return Point3D { x: x, y: y, z: z };
     }
 }
 
 struct Triangle {
-	pub vertex1_idx: usize,
-	pub vertex2_idx: usize,
-	pub vertex3_idx: usize,
-	pub color: pixels::Color
+    pub vertex1_idx: usize,
+    pub vertex2_idx: usize,
+    pub vertex3_idx: usize,
+    pub color: pixels::Color,
 }
 
 impl Triangle {
-	pub fn new(v1: usize, v2: usize, v3: usize, color: pixels::Color) -> Triangle {
-		return Triangle {
-			vertex1_idx: v1,
-			vertex2_idx: v2,
-			vertex3_idx: v3,
-			color: color
-		}
-	}
+    pub fn new(v1: usize, v2: usize, v3: usize, color: pixels::Color) -> Triangle {
+        return Triangle {
+            vertex1_idx: v1,
+            vertex2_idx: v2,
+            vertex3_idx: v3,
+            color: color,
+        };
+    }
 }
 
 struct Model {
-	vertexes: Vec<Point3D>,
-	triangles: Vec<Triangle>
+    vertexes: Vec<Point3D>,
+    triangles: Vec<Triangle>,
+}
+
+struct Transform {
+    scale: f32,
+    rotation: [[f32; 3]; 3],
+    translation: Point3D,
 }
 
 struct Instance<'a> {
-	model: &'a Model,
-	position: Point3D
+    model: &'a Model,
+    transform: Transform,
 }
 
 fn put_pixel(canvas: &render::Canvas<video::Window>, x: i32, y: i32, color: pixels::Color) {
-	let canvas_x = x + HALF_CANVAS;
-	let canvas_y = HALF_CANVAS - y - 1;
-	canvas.pixel(canvas_x as i16, canvas_y as i16, color).unwrap();
+    let canvas_x = x + HALF_CANVAS;
+    let canvas_y = HALF_CANVAS - y - 1;
+    canvas
+        .pixel(canvas_x as i16, canvas_y as i16, color)
+        .unwrap();
 }
 
 fn interpolate(i0: i32, d0: f32, i1: i32, d1: f32) -> Vec<f32> {
-	let mut values = vec![];
-	let a: f32 = (d1 - d0) as f32 / (i1 - i0) as f32;
-	let mut d = d0;
-	for _ in i0..i1 {
-		values.push(d);
-		d = d + a;
-	}
-	return values;
+    let mut values = vec![];
+    let a: f32 = (d1 - d0) as f32 / (i1 - i0) as f32;
+    let mut d = d0;
+    for _ in i0..i1 {
+        values.push(d);
+        d = d + a;
+    }
+    return values;
+}
+
+fn matrix_rotation_y(degrees: f32) -> [[f32; 3]; 3] {
+    let radians = degrees * (std::f32::consts::FRAC_PI_2 / 180.0);
+    let cos = radians.cos();
+    let sin = radians.sin();
+    return [[cos, 0.0, -sin], [0.0, 1.0, 0.0], [sin, 0.0, cos]];
+}
+
+fn matrix_scale(scale: f32) -> [[f32; 3]; 3] {
+    return [[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, scale]];
+}
+
+fn multiply_matrices(m1: [[f32; 3]; 3], m2: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut result: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
+    for i in 0..2 {
+        for j in 0..2 {
+            result[i][j] += m1[i][j] * m2[j][i];
+        }
+    }
+    return result;
+}
+
+fn matrix_multiply_vector(v: &Point3D, m: [[f32; 3]; 3]) -> Point3D {
+    Point3D::new(
+        v.x * m[0][0] + v.y * m[0][1] + v.z * m[0][2],
+        v.x * m[1][0] + v.y * m[1][1] + v.z * m[1][2],
+        v.x * m[2][0] + v.y * m[2][1] + v.z * m[2][2],
+    )
 }
 
 fn multiply_color(color: pixels::Color, factor: f32) -> pixels::Color {
-	return pixels::Color::RGB((color.r as f32 * factor) as u8, (color.g as f32 * factor) as u8, (color.b as f32 * factor) as u8);
+    return pixels::Color::RGB(
+        (color.r as f32 * factor) as u8,
+        (color.g as f32 * factor) as u8,
+        (color.b as f32 * factor) as u8,
+    );
 }
 
 fn viewport_to_canvas(x: f32, y: f32) -> rect::Point {
-	let canvas_x: i32 = (x * (SCREEN_WIDTH as f32 / VIEWPORT_WIDTH)) as i32;
-	let canvas_y: i32 = (y * (SCREEN_HEIGHT as f32 / VIEWPORT_HEIGHT)) as i32;
-	return rect::Point::new(canvas_x, canvas_y);
+    let canvas_x: i32 = (x * (SCREEN_WIDTH as f32 / VIEWPORT_WIDTH)) as i32;
+    let canvas_y: i32 = (y * (SCREEN_HEIGHT as f32 / VIEWPORT_HEIGHT)) as i32;
+    return rect::Point::new(canvas_x, canvas_y);
 }
 
 fn project_vertex(v: &Point3D) -> rect::Point {
-	return viewport_to_canvas(v.x * VIEWPORT_DEPTH / v.z, v.y * VIEWPORT_DEPTH / v.z);
+    return viewport_to_canvas(v.x * VIEWPORT_DEPTH / v.z, v.y * VIEWPORT_DEPTH / v.z);
 }
 
-fn draw_wireframe_triangle(canvas: &render::Canvas<video::Window>, p0: rect::Point, p1: rect::Point, p2: rect::Point, color: pixels::Color) {
-	draw_line(canvas, p0, p1, color);
-	draw_line(canvas, p1, p2, color);
-	draw_line(canvas, p2, p0, color);
+fn draw_wireframe_triangle(
+    canvas: &render::Canvas<video::Window>,
+    p0: rect::Point,
+    p1: rect::Point,
+    p2: rect::Point,
+    color: pixels::Color,
+) {
+    draw_line(canvas, p0, p1, color);
+    draw_line(canvas, p1, p2, color);
+    draw_line(canvas, p2, p0, color);
 }
 
-fn draw_line(canvas: &render::Canvas<video::Window>, mut p0: rect::Point , mut p1: rect::Point, color: pixels::Color) -> () {
-
-	if (p1.x() - p0.x()).abs() > (p1.y() - p0.y()).abs() {
-		if p0.x() > p1.x() {
-			let temp = p0;
-			p0 = p1;
-			p1 = temp;
-		}
-		let ys = interpolate(p0.x(), p0.y() as f32, p1.x(), p1.y() as f32);
-		for x in p0.x()..p1.x() {
-			put_pixel(canvas, x as i32, ys[(x - p0.x()) as usize] as i32, color);
-		}
-	} else {
-		if p0.y() > p1.y() {
-			let temp = p0;
-			p0 = p1;
-			p1 = temp;
-		}
-		let xs = interpolate(p0.y(), p0.x() as f32, p1.y(), p1.x() as f32);
-		for y in p0.y()..p1.y() {
-			put_pixel(canvas, xs[(y-p0.y()) as usize] as i32, y as i32, color);
-		}
-	}
+fn draw_line(
+    canvas: &render::Canvas<video::Window>,
+    mut p0: rect::Point,
+    mut p1: rect::Point,
+    color: pixels::Color,
+) -> () {
+    if (p1.x() - p0.x()).abs() > (p1.y() - p0.y()).abs() {
+        if p0.x() > p1.x() {
+            let temp = p0;
+            p0 = p1;
+            p1 = temp;
+        }
+        let ys = interpolate(p0.x(), p0.y() as f32, p1.x(), p1.y() as f32);
+        for x in p0.x()..p1.x() {
+            put_pixel(canvas, x as i32, ys[(x - p0.x()) as usize] as i32, color);
+        }
+    } else {
+        if p0.y() > p1.y() {
+            let temp = p0;
+            p0 = p1;
+            p1 = temp;
+        }
+        let xs = interpolate(p0.y(), p0.x() as f32, p1.y(), p1.x() as f32);
+        for y in p0.y()..p1.y() {
+            put_pixel(canvas, xs[(y - p0.y()) as usize] as i32, y as i32, color);
+        }
+    }
 }
 
-fn render_triangle(canvas: &render::Canvas<video::Window>, triangle: &Triangle, projected: &Vec<rect::Point>) {
-	draw_wireframe_triangle(canvas, projected[triangle.vertex1_idx], projected[triangle.vertex2_idx], projected[triangle.vertex3_idx], triangle.color);
+fn render_triangle(
+    canvas: &render::Canvas<video::Window>,
+    triangle: &Triangle,
+    projected: &Vec<rect::Point>,
+) {
+    draw_wireframe_triangle(
+        canvas,
+        projected[triangle.vertex1_idx],
+        projected[triangle.vertex2_idx],
+        projected[triangle.vertex3_idx],
+        triangle.color,
+    );
+}
+
+fn apply_transform(v: &Point3D, t: &Transform) -> Point3D {
+    let v1 = Point3D::new(v.x * t.scale, v.y * t.scale, v.z * t.scale);
+    let v2 = matrix_multiply_vector(&v1, t.rotation);
+    let v3 = Point3D::new(
+        v2.x + t.translation.x,
+        v2.y + t.translation.y,
+        v2.z + t.translation.z,
+    );
+    return v3;
 }
 
 fn render_instance(canvas: &render::Canvas<video::Window>, instance: Instance) -> () {
-	let model = instance.model;
-	let pos = instance.position;
+    let model = instance.model;
 
-	let projected = instance.model.vertexes.iter().map(|v| {
-		let positioned = Point3D::new(v.x + pos.x, v.y + pos.y, v.z + pos.z);
-		project_vertex(&positioned)
-	}).collect();
+    let projected = instance
+        .model
+        .vertexes
+        .iter()
+        .map(|v| {
+            let positioned = apply_transform(v, &instance.transform);
+            project_vertex(&positioned)
+        })
+        .collect();
 
-
-	for t in &model.triangles {
-		render_triangle(canvas, t, &projected);
-	}
+    for t in &model.triangles {
+        render_triangle(canvas, t, &projected);
+    }
 }
 
 fn render_scene(canvas: &render::Canvas<video::Window>, instances: Vec<Instance>) -> () {
-	for i in instances {
-		render_instance(canvas, i);
-	}
+    for i in instances {
+        render_instance(canvas, i);
+    }
 }
 
 fn main() -> Result<(), String> {
     let sdl_context = sdl2::init()?;
     let video_subsys = sdl_context.video()?;
-    let window = video_subsys.window("computer graphics from scratch: raster", SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32)
+    let window = video_subsys
+        .window(
+            "computer graphics from scratch: raster",
+            SCREEN_WIDTH as u32,
+            SCREEN_HEIGHT as u32,
+        )
         .position_centered()
         .opengl()
         .build()
@@ -163,56 +243,63 @@ fn main() -> Result<(), String> {
     canvas.clear();
 
     let mut vertexes = vec![
-    	Point3D::new(1.0, 1.0, 1.0),
-    	Point3D::new(-1.0, 1.0, 1.0),
-    	Point3D::new(-1.0, -1.0, 1.0),
-    	Point3D::new(1.0, -1.0, 1.0),
-    	Point3D::new(1.0, 1.0, -1.0),
-    	Point3D::new(-1.0, 1.0, -1.0),
-    	Point3D::new(-1.0, -1.0, -1.0),
-    	Point3D::new(1.0, -1.0, -1.0)
+        Point3D::new(1.0, 1.0, 1.0),
+        Point3D::new(-1.0, 1.0, 1.0),
+        Point3D::new(-1.0, -1.0, 1.0),
+        Point3D::new(1.0, -1.0, 1.0),
+        Point3D::new(1.0, 1.0, -1.0),
+        Point3D::new(-1.0, 1.0, -1.0),
+        Point3D::new(-1.0, -1.0, -1.0),
+        Point3D::new(1.0, -1.0, -1.0),
     ];
 
-	let white = pixels::Color::RGB(255, 255, 255);
-	let red = pixels::Color::RGB(255, 0, 0);
-	let green = pixels::Color::RGB(0, 255, 0);
-	let blue = pixels::Color::RGB(0, 0, 255);
-	let yellow = pixels::Color::RGB(255, 255, 0);
-	let purple = pixels::Color::RGB(255, 0, 255);
-	let cyan = pixels::Color::RGB(0, 255, 255);
+    let white = pixels::Color::RGB(255, 255, 255);
+    let red = pixels::Color::RGB(255, 0, 0);
+    let green = pixels::Color::RGB(0, 255, 0);
+    let blue = pixels::Color::RGB(0, 0, 255);
+    let yellow = pixels::Color::RGB(255, 255, 0);
+    let purple = pixels::Color::RGB(255, 0, 255);
+    let cyan = pixels::Color::RGB(0, 255, 255);
 
-	let triangles = vec![
-		Triangle::new(0, 1, 2, red),
-		Triangle::new(0, 2, 3, red),
-		Triangle::new(4, 0, 3, green),
-		Triangle::new(4, 3, 7, green),
-		Triangle::new(5, 4, 7, blue),
-		Triangle::new(5, 7, 6, blue),
-		Triangle::new(1, 5, 6, yellow),
-		Triangle::new(1, 6, 2, yellow),
-		Triangle::new(4, 5, 1, purple),
-		Triangle::new(4, 1, 0, purple),
-		Triangle::new(2, 6, 7, cyan),
-		Triangle::new(2, 7, 3, cyan),
-	];
+    let triangles = vec![
+        Triangle::new(0, 1, 2, red),
+        Triangle::new(0, 2, 3, red),
+        Triangle::new(4, 0, 3, green),
+        Triangle::new(4, 3, 7, green),
+        Triangle::new(5, 4, 7, blue),
+        Triangle::new(5, 7, 6, blue),
+        Triangle::new(1, 5, 6, yellow),
+        Triangle::new(1, 6, 2, yellow),
+        Triangle::new(4, 5, 1, purple),
+        Triangle::new(4, 1, 0, purple),
+        Triangle::new(2, 6, 7, cyan),
+        Triangle::new(2, 7, 3, cyan),
+    ];
 
-	let cube = Model {
-		vertexes: vertexes,
-		triangles: triangles
-	};
+    let cube = Model {
+        vertexes: vertexes,
+        triangles: triangles,
+    };
 
-	let cube1 = Instance {
-		model: &cube,
-		position: Point3D::new(-1.5, 0.0, 7.0)
-	};
+    let cube1 = Instance {
+        model: &cube,
+        transform: Transform {
+            scale: 0.75,
+            rotation: matrix_scale(1.0),
+            translation: Point3D::new(-1.5, 0.0, 7.0),
+        },
+    };
 
-	let cube2 = Instance {
-		model: &cube,
-		position: Point3D::new(1.25, 2.0, 7.5)
-	};
+    let cube2 = Instance {
+        model: &cube,
+        transform: Transform {
+            scale: 1.0,
+            rotation: matrix_rotation_y(195.0),
+            translation: Point3D::new(1.25, 2.5, 7.5),
+        },
+    };
 
-	render_scene(&canvas, vec![cube1, cube2]);
-
+    render_scene(&canvas, vec![cube1, cube2]);
 
     canvas.present();
 
@@ -220,14 +307,15 @@ fn main() -> Result<(), String> {
 
     'main: loop {
         for event in events.poll_iter() {
-
             match event {
+                Event::Quit { .. } => break 'main,
 
-                Event::Quit {..} => break 'main,
-
-                Event::KeyDown {keycode: Some(keycode), ..} => {
+                Event::KeyDown {
+                    keycode: Some(keycode),
+                    ..
+                } => {
                     if keycode == Keycode::Escape {
-                        break 'main
+                        break 'main;
                     }
                 }
 
