@@ -20,6 +20,8 @@ struct Pt {
     h: f32,
 }
 
+type Coords = [[f32; 4]; 4];
+
 #[derive(Copy, Clone)]
 struct Point3D {
     pub x: f32,
@@ -58,13 +60,35 @@ struct Model {
 
 struct Transform {
     scale: f32,
-    rotation: [[f32; 3]; 3],
+    rotation: Coords,
     translation: Point3D,
 }
 
 struct Instance<'a> {
     model: &'a Model,
-    transform: Transform,
+    transform: Coords,
+}
+
+impl Instance<'_> {
+    pub fn new(model: &Model, transform: Transform) -> Instance {
+        let m = multiply_matrices(
+            matrix_translate(transform.translation),
+            multiply_matrices(transform.rotation, matrix_scale(transform.scale)),
+        );
+        // let m = multiply_matrices(
+        // 	matrix_translate(transform.translation),
+        // 	matrix_scale(1.0));
+        // let m = multiply_matrices(matrix_translate(transform.translation), transform.rotation);
+        return Instance {
+            model: model,
+            transform: m,
+        };
+    }
+}
+
+struct Camera {
+    orientation: Coords,
+    position: Point3D,
 }
 
 fn put_pixel(canvas: &render::Canvas<video::Window>, x: i32, y: i32, color: pixels::Color) {
@@ -86,32 +110,73 @@ fn interpolate(i0: i32, d0: f32, i1: i32, d1: f32) -> Vec<f32> {
     return values;
 }
 
-fn matrix_rotation_y(degrees: f32) -> [[f32; 3]; 3] {
+fn matrix_rotation_y(degrees: f32) -> Coords {
     let radians = degrees * (std::f32::consts::FRAC_PI_2 / 180.0);
     let cos = radians.cos();
     let sin = radians.sin();
-    return [[cos, 0.0, -sin], [0.0, 1.0, 0.0], [sin, 0.0, cos]];
+    return [
+        [cos, 0.0, -sin, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [sin, 0.0, cos, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
 }
 
-fn matrix_scale(scale: f32) -> [[f32; 3]; 3] {
-    return [[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, scale]];
+fn matrix_scale(scale: f32) -> Coords {
+    return [
+        [scale, 0.0, 0.0, 0.0],
+        [0.0, scale, 0.0, 0.0],
+        [0.0, 0.0, scale, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
 }
 
-fn multiply_matrices(m1: [[f32; 3]; 3], m2: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
-    let mut result: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
-    for i in 0..2 {
-        for j in 0..2 {
-            result[i][j] += m1[i][j] * m2[j][i];
+fn matrix_translate(t: Point3D) -> Coords {
+    return [
+        [1.0, 0.0, 0.0, t.x],
+        [0.0, 1.0, 0.0, t.y],
+        [0.0, 0.0, 1.0, t.z],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+}
+
+fn transpose_matrix(m: Coords) -> Coords {
+    let mut result: Coords = [
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+    ];
+    for i in 0..3 {
+        for j in 0..3 {
+            result[i][j] += m[j][i];
         }
     }
     return result;
 }
 
-fn matrix_multiply_vector(v: &Point3D, m: [[f32; 3]; 3]) -> Point3D {
+fn multiply_matrices(m1: Coords, m2: Coords) -> Coords {
+    let mut result: Coords = [
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+    ];
+    for i in 0..4 {
+        for j in 0..4 {
+        	for k in 0..4 {
+            	result[i][j] += m1[i][k] * m2[k][j];
+        	}
+        }
+    }
+    return result;
+}
+
+fn matrix_multiply_vector(v: &Point3D, m: Coords) -> Point3D {
     Point3D::new(
-        v.x * m[0][0] + v.y * m[0][1] + v.z * m[0][2],
-        v.x * m[1][0] + v.y * m[1][1] + v.z * m[1][2],
-        v.x * m[2][0] + v.y * m[2][1] + v.z * m[2][2],
+        v.x * m[0][0] + v.y * m[0][1] + v.z * m[0][2] + m[0][3],
+        v.x * m[1][0] + v.y * m[1][1] + v.z * m[1][2] + m[1][3],
+        v.x * m[2][0] + v.y * m[2][1] + v.z * m[2][2] + m[2][3],
     )
 }
 
@@ -189,8 +254,9 @@ fn render_triangle(
 }
 
 fn apply_transform(v: &Point3D, t: &Transform) -> Point3D {
-    let v1 = Point3D::new(v.x * t.scale, v.y * t.scale, v.z * t.scale);
-    let v2 = matrix_multiply_vector(&v1, t.rotation);
+	let v2 = v;
+    // let v1 = Point3D::new(v.x * t.scale, v.y * t.scale, v.z * t.scale);
+    // let v2 = matrix_multiply_vector(&v1, t.rotation);
     let v3 = Point3D::new(
         v2.x + t.translation.x,
         v2.y + t.translation.y,
@@ -199,15 +265,13 @@ fn apply_transform(v: &Point3D, t: &Transform) -> Point3D {
     return v3;
 }
 
-fn render_instance(canvas: &render::Canvas<video::Window>, instance: Instance) -> () {
-    let model = instance.model;
-
-    let projected = instance
-        .model
+fn render_instance(canvas: &render::Canvas<video::Window>, model: &Model, transform: Coords) -> () {
+    let projected = model
         .vertexes
         .iter()
         .map(|v| {
-            let positioned = apply_transform(v, &instance.transform);
+            let positioned = matrix_multiply_vector(v, transform);
+            // let positioned = apply_transform(v, &transform);
             project_vertex(&positioned)
         })
         .collect();
@@ -217,9 +281,19 @@ fn render_instance(canvas: &render::Canvas<video::Window>, instance: Instance) -
     }
 }
 
-fn render_scene(canvas: &render::Canvas<video::Window>, instances: Vec<Instance>) -> () {
+fn render_scene(
+    canvas: &render::Canvas<video::Window>,
+    camera: Camera,
+    instances: Vec<Instance>,
+) -> () {
+    let rotation = transpose_matrix(camera.orientation);
+    let pos = camera.position;
+    let translation = matrix_translate(Point3D::new(-1.0 * pos.x, -1.0 * pos.y, -1.0 * pos.z));
+    let camera_matrix = multiply_matrices(rotation, translation);
+
     for i in instances {
-        render_instance(canvas, i);
+        let transform = multiply_matrices(camera_matrix, i.transform);
+        render_instance(canvas, i.model, transform);
     }
 }
 
@@ -242,7 +316,7 @@ fn main() -> Result<(), String> {
     canvas.set_draw_color(pixels::Color::RGB(0, 0, 0));
     canvas.clear();
 
-    let mut vertexes = vec![
+    let vertexes = vec![
         Point3D::new(1.0, 1.0, 1.0),
         Point3D::new(-1.0, 1.0, 1.0),
         Point3D::new(-1.0, -1.0, 1.0),
@@ -253,7 +327,7 @@ fn main() -> Result<(), String> {
         Point3D::new(1.0, -1.0, -1.0),
     ];
 
-    let white = pixels::Color::RGB(255, 255, 255);
+    // let white = pixels::Color::RGB(255, 255, 255);
     let red = pixels::Color::RGB(255, 0, 0);
     let green = pixels::Color::RGB(0, 255, 0);
     let blue = pixels::Color::RGB(0, 0, 255);
@@ -281,25 +355,30 @@ fn main() -> Result<(), String> {
         triangles: triangles,
     };
 
-    let cube1 = Instance {
-        model: &cube,
-        transform: Transform {
+    let cube1 = Instance::new(
+        &cube,
+        Transform {
             scale: 0.75,
             rotation: matrix_scale(1.0),
             translation: Point3D::new(-1.5, 0.0, 7.0),
         },
-    };
+    );
 
-    let cube2 = Instance {
-        model: &cube,
-        transform: Transform {
+    let cube2 = Instance::new(
+        &cube,
+        Transform {
             scale: 1.0,
             rotation: matrix_rotation_y(195.0),
             translation: Point3D::new(1.25, 2.5, 7.5),
         },
+    );
+
+    let camera = Camera {
+        position: Point3D::new(-3.0, 1.0, 2.0),
+        orientation: matrix_rotation_y(-30.0),
     };
 
-    render_scene(&canvas, vec![cube1, cube2]);
+    render_scene(&canvas, camera, vec![cube1, cube2]);
 
     canvas.present();
 
