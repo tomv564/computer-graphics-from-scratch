@@ -35,6 +35,7 @@ impl Point3D {
     }
 }
 
+#[derive(Clone)]
 struct Triangle {
     pub vertex1_idx: usize,
     pub vertex2_idx: usize,
@@ -56,6 +57,8 @@ impl Triangle {
 struct Model {
     vertexes: Vec<Point3D>,
     triangles: Vec<Triangle>,
+    bounds_center: Point3D,
+    bounds_radius: f32
 }
 
 struct Transform {
@@ -89,6 +92,12 @@ impl Instance<'_> {
 struct Camera {
     orientation: Coords,
     position: Point3D,
+    clipping_planes: Vec<Plane>
+}
+
+struct Plane {
+	normal: Point3D,
+	distance: f32
 }
 
 fn put_pixel(canvas: &render::Canvas<video::Window>, x: i32, y: i32, color: pixels::Color) {
@@ -138,6 +147,10 @@ fn matrix_translate(t: Point3D) -> Coords {
         [0.0, 0.0, 1.0, t.z],
         [0.0, 0.0, 0.0, 1.0],
     ];
+}
+
+fn dot_product(v1: Point3D, v2: Point3D) -> f32 {
+	v1.x * v2.x + v1.y * v2.y + v1.z * v2.z
 }
 
 fn transpose_matrix(m: Coords) -> Coords {
@@ -265,20 +278,83 @@ fn apply_transform(v: &Point3D, t: &Transform) -> Point3D {
     return v3;
 }
 
-fn render_instance(canvas: &render::Canvas<video::Window>, model: &Model, transform: Coords) -> () {
+fn render_instance(canvas: &render::Canvas<video::Window>, model: &Model) -> () {
     let projected = model
         .vertexes
         .iter()
         .map(|v| {
-            let positioned = matrix_multiply_vector(v, transform);
-            // let positioned = apply_transform(v, &transform);
-            project_vertex(&positioned)
+            project_vertex(v)
         })
         .collect();
 
     for t in &model.triangles {
         render_triangle(canvas, t, &projected);
     }
+}
+
+fn clip_triangle(plane: &Plane, triangle: Triangle, vertexes: &Vec<Point3D>) -> Vec<Triangle> {
+	let v1 = vertexes[triangle.vertex1_idx];
+	let v2 = vertexes[triangle.vertex2_idx];
+	let v3 = vertexes[triangle.vertex3_idx];
+
+	// TODO: this seems different from the sphere clip test?
+	let in1 = dot_product(plane.normal, v1) + plane.distance > 0.0;
+	let in2 = dot_product(plane.normal, v2) + plane.distance > 0.0;
+	let in3 = dot_product(plane.normal, v3) + plane.distance > 0.0;
+	let in_count = in1 as i32 + in2 as i32 + in3 as i32;
+	if in_count == 0 {
+		// full clip, don't return anything.
+		println!("clipped whole triangle");
+		return vec![];
+	} else if in_count == 3 {
+		// preserve whole triangle
+		println!("all points in plane");
+		return vec![triangle];
+	} else {
+		println!("partial clipping possible, returning full triangle");
+		return vec![triangle];
+	}
+}
+
+fn transform_and_clip(planes: &Vec<Plane>, model: &Model, transform: Coords) -> Option<Model> {
+	// early clip, only transform bounds center.
+
+	let bounds_center = matrix_multiply_vector(&model.bounds_center, transform);
+	let radius2 = model.bounds_radius * model.bounds_radius;
+	for p in planes {
+		// TODO: understand this. What does signed distance have to do with dot product?
+		// get distance from center to plane.
+		let distance2 = dot_product(p.normal, bounds_center) + p.distance;
+		if distance2 < -radius2 {
+			println!("Early discard !");
+			return None;
+		}
+	}
+    let positioned = model
+        .vertexes
+        .iter()
+        .map(|v| {
+			matrix_multiply_vector(v, transform)
+        })
+        .collect();
+
+    let mut triangles = model.triangles.clone();
+    for p in planes {
+    	let mut new_triangles = vec![];
+    	// clip the positioned triangles
+    	for t in triangles {
+    		new_triangles.append(&mut clip_triangle(p, t, &positioned));
+    		// new_triangles.push(t);
+    	}
+    	triangles = new_triangles;
+    }
+
+    Some(Model {
+    	triangles: triangles,
+    	vertexes: positioned,
+    	bounds_radius: model.bounds_radius,
+    	bounds_center: model.bounds_center
+    })
 }
 
 fn render_scene(
@@ -293,7 +369,12 @@ fn render_scene(
 
     for i in instances {
         let transform = multiply_matrices(camera_matrix, i.transform);
-        render_instance(canvas, i.model, transform);
+        /* camera.clipping_planes */
+        match transform_and_clip(&camera.clipping_planes, i.model, transform) {
+        	Some(m) => render_instance(canvas, &m),
+        	None => {}
+        }
+
     }
 }
 
@@ -353,6 +434,10 @@ fn main() -> Result<(), String> {
     let cube = Model {
         vertexes: vertexes,
         triangles: triangles,
+
+        // center should have bounding volume of sphere radius root 3.
+        bounds_center: Point3D::new(0.0, 0.0, 0.0),
+        bounds_radius: (3.0 as f32).sqrt() // (sqrt (1.0 + 2.0))
     };
 
     let cube1 = Instance::new(
@@ -373,14 +458,26 @@ fn main() -> Result<(), String> {
         },
     );
 
+    let s2: f32 = (2 as f32).sqrt();// 1.0 / (2 as f32).sqrt();
+    let clipping_planes = vec![
+    	Plane { normal: Point3D::new(0.0, 0.0, 0.0), distance: 1.0}, // near
+    	Plane { normal: Point3D::new(s2, 0.0, s2), distance: 0.0}, // left,
+    	Plane { normal: Point3D::new(-s2, 0.0, s2), distance: 0.0}, // right
+    	Plane { normal: Point3D::new(0.0, -s2, s2), distance: 0.0}, // top
+    	Plane { normal: Point3D::new(0.0, s2, s2), distance: 0.0}, // bottom
+    ];
+
     let camera = Camera {
         position: Point3D::new(-3.0, 1.0, 2.0),
         orientation: matrix_rotation_y(-30.0),
+        clipping_planes: clipping_planes
     };
 
     render_scene(&canvas, camera, vec![cube1, cube2]);
 
     canvas.present();
+
+    println!("done");
 
     let mut events = sdl_context.event_pump()?;
 
