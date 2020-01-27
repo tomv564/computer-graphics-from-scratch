@@ -22,6 +22,8 @@ struct Pt {
 
 type Coords = [[f32; 4]; 4];
 
+type DepthBuffer = [f32; (SCREEN_HEIGHT*SCREEN_WIDTH) as usize];
+
 #[derive(Copy, Clone)]
 struct Point3D {
     pub x: f32,
@@ -33,22 +35,32 @@ impl Point3D {
     pub fn new(x: f32, y: f32, z: f32) -> Point3D {
         return Point3D { x: x, y: y, z: z };
     }
+
+    pub fn multiply(&self, f: f32) -> Point3D {
+        return Point3D {x: self.x*f, y: self.y*f, z: self.z*f};
+    }
+
+    pub fn add(&self, v: &Point3D) -> Point3D {
+        return Point3D {x: self.x + v.x, y: self.y + v.y, z: self.z + v.z};
+    }
 }
 
 #[derive(Clone)]
 struct Triangle {
-    pub vertex1_idx: usize,
-    pub vertex2_idx: usize,
-    pub vertex3_idx: usize,
+    // pub vertex1_idx: usize,
+    // pub vertex2_idx: usize,
+    // pub vertex3_idx: usize,
+    pub indexes: Vec<usize>,
     pub color: pixels::Color,
 }
 
 impl Triangle {
     pub fn new(v1: usize, v2: usize, v3: usize, color: pixels::Color) -> Triangle {
         return Triangle {
-            vertex1_idx: v1,
-            vertex2_idx: v2,
-            vertex3_idx: v3,
+            // vertex1_idx: v1,
+            // vertex2_idx: v2,
+            // vertex3_idx: v3,
+            indexes: vec![v1, v2, v3],
             color: color,
         };
     }
@@ -75,8 +87,8 @@ struct Instance<'a> {
 impl Instance<'_> {
     pub fn new(model: &Model, transform: Transform) -> Instance {
         let m = multiply_matrices(
-            matrix_translate(transform.translation),
-            multiply_matrices(transform.rotation, matrix_scale(transform.scale)),
+            &matrix_translate(&transform.translation),
+            &multiply_matrices(&transform.rotation, &matrix_scale(transform.scale)),
         );
         // let m = multiply_matrices(
         // 	matrix_translate(transform.translation),
@@ -140,7 +152,7 @@ fn matrix_scale(scale: f32) -> Coords {
     ];
 }
 
-fn matrix_translate(t: Point3D) -> Coords {
+fn matrix_translate(t: &Point3D) -> Coords {
     return [
         [1.0, 0.0, 0.0, t.x],
         [0.0, 1.0, 0.0, t.y],
@@ -149,11 +161,19 @@ fn matrix_translate(t: Point3D) -> Coords {
     ];
 }
 
-fn dot_product(v1: Point3D, v2: Point3D) -> f32 {
+fn dot_product(v1: &Point3D, v2: &Point3D) -> f32 {
 	v1.x * v2.x + v1.y * v2.y + v1.z * v2.z
 }
 
-fn transpose_matrix(m: Coords) -> Coords {
+fn cross_product(v1: &Point3D, v2: &Point3D) -> Point3D {
+    return Point3D::new(
+        v1.y*v2.z - v1.z*v2.y,
+        v1.z*v2.x - v1.x*v2.z,
+        v1.x*v2.y - v1.y*v2.x
+    )
+}
+
+fn transpose_matrix(m: &Coords) -> Coords {
     let mut result: Coords = [
         [0.0, 0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0, 0.0],
@@ -168,7 +188,7 @@ fn transpose_matrix(m: Coords) -> Coords {
     return result;
 }
 
-fn multiply_matrices(m1: Coords, m2: Coords) -> Coords {
+fn multiply_matrices(m1: &Coords, m2: &Coords) -> Coords {
     let mut result: Coords = [
         [0.0, 0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0, 0.0],
@@ -211,60 +231,188 @@ fn project_vertex(v: &Point3D) -> rect::Point {
     return viewport_to_canvas(v.x * VIEWPORT_DEPTH / v.z, v.y * VIEWPORT_DEPTH / v.z);
 }
 
-fn draw_wireframe_triangle(
-    canvas: &render::Canvas<video::Window>,
-    p0: rect::Point,
-    p1: rect::Point,
-    p2: rect::Point,
-    color: pixels::Color,
-) {
-    draw_line(canvas, p0, p1, color);
-    draw_line(canvas, p1, p2, color);
-    draw_line(canvas, p2, p0, color);
+// fn draw_wireframe_triangle(
+//     canvas: &render::Canvas<video::Window>,
+//     p0: rect::Point,
+//     p1: rect::Point,
+//     p2: rect::Point,
+//     color: pixels::Color,
+// ) {
+//     draw_line(canvas, p0, p1, color);
+//     draw_line(canvas, p1, p2, color);
+//     draw_line(canvas, p2, p0, color);
+// }
+
+fn edge_interpolate(y0: i32, v0: f32, y1: i32, v1: f32, y2: i32, v2: f32) -> (Vec<f32>, Vec<f32>) {
+    // get horizontal points for each side
+    let v01 = interpolate(y0, v0 as f32, y1, v1 as f32);
+    let v12 = interpolate(y1, v1 as f32, y2, v2 as f32);
+    let v02 = interpolate(y0, v0 as f32, y2, v2 as f32);
+
+    // two sides are v02 and (v01+v12)
+    let v012 = [&v01[..], &v12[..]].concat();
+
+    return (v02, v012);
 }
 
-fn draw_line(
-    canvas: &render::Canvas<video::Window>,
-    mut p0: rect::Point,
-    mut p1: rect::Point,
-    color: pixels::Color,
-) -> () {
-    if (p1.x() - p0.x()).abs() > (p1.y() - p0.y()).abs() {
-        if p0.x() > p1.x() {
-            let temp = p0;
-            p0 = p1;
-            p1 = temp;
-        }
-        let ys = interpolate(p0.x(), p0.y() as f32, p1.x(), p1.y() as f32);
-        for x in p0.x()..p1.x() {
-            put_pixel(canvas, x as i32, ys[(x - p0.x()) as usize] as i32, color);
-        }
-    } else {
-        if p0.y() > p1.y() {
-            let temp = p0;
-            p0 = p1;
-            p1 = temp;
-        }
-        let xs = interpolate(p0.y(), p0.x() as f32, p1.y(), p1.x() as f32);
-        for y in p0.y()..p1.y() {
-            put_pixel(canvas, xs[(y - p0.y()) as usize] as i32, y as i32, color);
-        }
+fn sorted_vertex_indices(indices: &Vec<usize>, projected: &Vec<rect::Point>) -> (usize, usize, usize) {
+    let mut i0 = 0;
+    let mut i1 = 1;
+    let mut i2 = 2;
+
+    // make p0 the lowest and p2 the highest point.
+    if projected[indices[i1]].y() < projected[indices[i0]].y() { std::mem::swap(& mut i1, & mut i0); }
+    if projected[indices[i2]].y() < projected[indices[i0]].y() { std::mem::swap(& mut i2, & mut i0); }
+    if projected[indices[i2]].y() < projected[indices[i1]].y() { std::mem::swap(& mut i2, & mut i1); }
+
+    (i0, i1, i2)
+}
+
+fn allowed_by_depth_buffer(db: &mut DepthBuffer, x: i32, y: i32, inv_z: f32) -> bool {
+    let canvas_x = x + HALF_CANVAS;
+    let canvas_y = HALF_CANVAS - y - 1;
+
+    if canvas_x < 0 || canvas_x >= SCREEN_WIDTH || canvas_y < 0 || canvas_y >= SCREEN_HEIGHT {
+        return false;
     }
+
+    let offset = (canvas_x + SCREEN_WIDTH * canvas_y) as usize;
+    if db[offset] < inv_z {
+        if db[offset] > 0.0 {
+            println!("overdraw at {}, {}, prev inv_z {} new inv_z {}", x, y, db[offset], inv_z);
+        }
+        (*db)[offset] = inv_z;
+        return true;
+    }
+    return false;
 }
 
-fn render_triangle(
-    canvas: &render::Canvas<video::Window>,
-    triangle: &Triangle,
-    projected: &Vec<rect::Point>,
-) {
-    draw_wireframe_triangle(
-        canvas,
-        projected[triangle.vertex1_idx],
-        projected[triangle.vertex2_idx],
-        projected[triangle.vertex3_idx],
-        triangle.color,
-    );
+fn compute_triangle_normal(v0: &Point3D, v1: &Point3D, v2: &Point3D) -> Point3D {
+    // two lines on the same surface by subtracting v0 from v1 and v2.
+    let v0v1: Point3D = v0.multiply(-1.0).add(v1);
+    let v0v2: Point3D = v0.multiply(-1.0).add(v2);
+
+    // perpendicular line to v0v1 and v0v2.
+    return cross_product(&v0v1, &v0v2);
 }
+
+fn render_triangle(canvas: &render::Canvas<video::Window>, db: &mut DepthBuffer,
+    triangle: &Triangle,
+    vertexes: &Vec<Point3D>,
+    projected: &Vec<rect::Point>
+ ) {
+
+    let (i0, i1, i2) = sorted_vertex_indices(&triangle.indexes, projected);
+    let v0 = vertexes[triangle.indexes[i0]];
+    let v1 = vertexes[triangle.indexes[i1]];
+    let v2 = vertexes[triangle.indexes[i2]];
+
+    // backface culling.
+    // calculate triangle normal
+    let normal = compute_triangle_normal(&vertexes[triangle.indexes[0]], &vertexes[triangle.indexes[1]], &vertexes[triangle.indexes[2]]);
+    let to_triangle_center = vertexes[triangle.indexes[0]].add(&vertexes[triangle.indexes[0]]).add(&vertexes[triangle.indexes[0]]).multiply(-1.0/3.0);
+
+    // - determine if angle from camera is greater than 90 degrees
+    if dot_product(&to_triangle_center, &normal) < 0.0 {
+        println!("back face detected");
+        return
+    }
+
+   let p0 = projected[triangle.indexes[i0]];
+   let p1 = projected[triangle.indexes[i1]];
+   let p2 = projected[triangle.indexes[i2]];
+
+
+    let (x01, x012) = edge_interpolate(p0.y, p0.x as f32, p1.y, p1.x as f32, p2.y, p2.x as f32);
+    // Note that we use the unprojected vertex Z-values here.
+    let (iz01, iz012) = edge_interpolate(p0.y, 1.0 / v0.z, p1.y, 1.0 / v1.z, p2.y, 1.0 / v2.z);
+
+	// figure out which side is left
+	let mut x_left = x01;
+	let mut x_right = x012;
+    let mut iz_left = iz01;
+    let mut iz_right = iz012;
+	let m = x_right.len() / 2;
+	if x_right[m] < x_left[m] {
+		std::mem::swap(& mut x_left, & mut x_right);
+        std::mem::swap(& mut iz_left, & mut iz_right);
+	}
+
+	for y in p0.y()..p2.y() {
+
+        // for this line, get start and end of X and 1/Z
+        let y_offset = (y  - p0.y()) as usize;
+        let xl = x_left[y_offset];
+        let xr = x_right[y_offset];
+        let zl = iz_left[y_offset];
+        let zr = iz_right[y_offset];
+
+        // interpolate
+        // println!("interpolate {} to {}", xl, xr);
+        let z_scan = interpolate(xl as i32, zl, xr as i32, zr);
+
+		for x in xl as i32 ..xr as i32 {
+            let x_index = (x - (xl as i32)) as usize;
+
+            // println!("y {} x {} z_scan length {} index {}", y, x_index, z_scan.len(), x_index);
+            let inv_z: f32 = z_scan[x_index];
+            // println!("{} index {} inv_z {}", x, x_index, inv_z);
+
+            if allowed_by_depth_buffer(db, x, y, inv_z) {
+                put_pixel(canvas, x, y, triangle.color);
+            }
+		}
+	}
+}
+
+
+// fn draw_line(
+//     canvas: &render::Canvas<video::Window>,
+//     mut p0: rect::Point,
+//     mut p1: rect::Point,
+//     color: pixels::Color,
+// ) -> () {
+//     if (p1.x() - p0.x()).abs() > (p1.y() - p0.y()).abs() {
+//         if p0.x() > p1.x() {
+//             let temp = p0;
+//             p0 = p1;
+//             p1 = temp;
+//         }
+//         let ys = interpolate(p0.x(), p0.y() as f32, p1.x(), p1.y() as f32);
+//         for x in p0.x()..p1.x() {
+//             put_pixel(canvas, x as i32, ys[(x - p0.x()) as usize] as i32, color);
+//         }
+//     } else {
+//         if p0.y() > p1.y() {
+//             let temp = p0;
+//             p0 = p1;
+//             p1 = temp;
+//         }
+//         let xs = interpolate(p0.y(), p0.x() as f32, p1.y(), p1.x() as f32);
+//         for y in p0.y()..p1.y() {
+//             put_pixel(canvas, xs[(y - p0.y()) as usize] as i32, y as i32, color);
+//         }
+//     }
+// }
+
+// fn render_triangle(
+//     canvas: &render::Canvas<video::Window>,
+//     depth_buffer: DepthBuffer,
+//     triangle: &Triangle,
+//     projected: &Vec<rect::Point>,
+// ) {
+
+//     // TODO: here we pass in canvas, depth_buffer, vertexes, projected
+//     //
+//     draw_filled_triangle(
+//         canvas,
+//         depth_buffer,
+//         projected[triangle.vertex1_idx],
+//         projected[triangle.vertex2_idx],
+//         projected[triangle.vertex3_idx],
+//         triangle.color,
+//     );
+// }
 
 fn apply_transform(v: &Point3D, t: &Transform) -> Point3D {
 	let v2 = v;
@@ -278,7 +426,7 @@ fn apply_transform(v: &Point3D, t: &Transform) -> Point3D {
     return v3;
 }
 
-fn render_instance(canvas: &render::Canvas<video::Window>, model: &Model) -> () {
+fn render_instance(canvas: &render::Canvas<video::Window>, depth_buffer: &mut DepthBuffer, model: &Model) -> () {
     let projected = model
         .vertexes
         .iter()
@@ -288,19 +436,19 @@ fn render_instance(canvas: &render::Canvas<video::Window>, model: &Model) -> () 
         .collect();
 
     for t in &model.triangles {
-        render_triangle(canvas, t, &projected);
+        render_triangle(canvas, depth_buffer, t, &model.vertexes, &projected);
     }
 }
 
 fn clip_triangle(plane: &Plane, triangle: Triangle, vertexes: &Vec<Point3D>) -> Vec<Triangle> {
-	let v1 = vertexes[triangle.vertex1_idx];
-	let v2 = vertexes[triangle.vertex2_idx];
-	let v3 = vertexes[triangle.vertex3_idx];
+	let v1 = vertexes[triangle.indexes[0]];
+	let v2 = vertexes[triangle.indexes[1]];
+	let v3 = vertexes[triangle.indexes[2]];
 
 	// TODO: this seems different from the sphere clip test?
-	let in1 = dot_product(plane.normal, v1) + plane.distance > 0.0;
-	let in2 = dot_product(plane.normal, v2) + plane.distance > 0.0;
-	let in3 = dot_product(plane.normal, v3) + plane.distance > 0.0;
+	let in1 = dot_product(&plane.normal, &v1) + plane.distance > 0.0;
+	let in2 = dot_product(&plane.normal, &v2) + plane.distance > 0.0;
+	let in3 = dot_product(&plane.normal, &v3) + plane.distance > 0.0;
 	let in_count = in1 as i32 + in2 as i32 + in3 as i32;
 	if in_count == 0 {
 		// full clip, don't return anything.
@@ -308,7 +456,7 @@ fn clip_triangle(plane: &Plane, triangle: Triangle, vertexes: &Vec<Point3D>) -> 
 		return vec![];
 	} else if in_count == 3 {
 		// preserve whole triangle
-		println!("all points in plane");
+		// println!("all points in plane");
 		return vec![triangle];
 	} else {
 		println!("partial clipping possible, returning full triangle");
@@ -324,7 +472,7 @@ fn transform_and_clip(planes: &Vec<Plane>, model: &Model, transform: Coords) -> 
 	for p in planes {
 		// TODO: understand this. What does signed distance have to do with dot product?
 		// get distance from center to plane.
-		let distance2 = dot_product(p.normal, bounds_center) + p.distance;
+		let distance2 = dot_product(&p.normal, &bounds_center) + p.distance;
 		if distance2 < -radius2 {
 			println!("Early discard !");
 			return None;
@@ -362,16 +510,17 @@ fn render_scene(
     camera: Camera,
     instances: Vec<Instance>,
 ) -> () {
-    let rotation = transpose_matrix(camera.orientation);
+    let rotation = transpose_matrix(&camera.orientation);
     let pos = camera.position;
-    let translation = matrix_translate(Point3D::new(-1.0 * pos.x, -1.0 * pos.y, -1.0 * pos.z));
-    let camera_matrix = multiply_matrices(rotation, translation);
+    let translation = matrix_translate(&Point3D::new(-1.0 * pos.x, -1.0 * pos.y, -1.0 * pos.z));
+    let camera_matrix = multiply_matrices(&rotation, &translation);
+    let mut depth_buffer: DepthBuffer = [0.0; (SCREEN_HEIGHT*SCREEN_WIDTH) as usize];
 
     for i in instances {
-        let transform = multiply_matrices(camera_matrix, i.transform);
+        let transform = multiply_matrices(&camera_matrix, &i.transform);
         /* camera.clipping_planes */
         match transform_and_clip(&camera.clipping_planes, i.model, transform) {
-        	Some(m) => render_instance(canvas, &m),
+        	Some(m) => render_instance(canvas, &mut depth_buffer, &m),
         	None => {}
         }
 
