@@ -45,6 +45,10 @@ impl Point3D {
     }
 }
 
+// impl Display for Point3D {
+//     fn
+// }
+
 #[derive(Clone)]
 struct Triangle {
     // pub vertex1_idx: usize,
@@ -52,16 +56,15 @@ struct Triangle {
     // pub vertex3_idx: usize,
     pub indexes: Vec<usize>,
     pub color: pixels::Color,
+    pub normals: Vec<Point3D>
 }
 
 impl Triangle {
-    pub fn new(v1: usize, v2: usize, v3: usize, color: pixels::Color) -> Triangle {
+    pub fn new(v1: usize, v2: usize, v3: usize, color: pixels::Color, normals: Vec<Point3D>) -> Triangle {
         return Triangle {
-            // vertex1_idx: v1,
-            // vertex2_idx: v2,
-            // vertex3_idx: v3,
             indexes: vec![v1, v2, v3],
             color: color,
+            normals: normals
         };
     }
 }
@@ -82,8 +85,12 @@ fn generate_sphere(divs: i32, color: pixels::Color) -> Model {
     for d in 0..divs+1 {
         let y = (2.0 / divs as f32) * (d as f32 - (divs as f32)/2.0);
         let radius = (1.0 - y*y).sqrt();
+        println!("generate sphere at height {}", y);
         for i in 0..divs {
-            let vertex = Point3D::new(radius * (i as f32 * delta_angle), y, radius*((i as f32 * delta_angle).sin()));
+            let x = radius * ((i as f32 * delta_angle).cos());
+            let z = radius * ((i as f32 * delta_angle).sin());
+            let vertex = Point3D::new(x, y, z);
+            println!("adding vertex {} {} {}", vertex.x, vertex.y, vertex.z);
             vertexes.push(vertex);
         }
     }
@@ -91,8 +98,8 @@ fn generate_sphere(divs: i32, color: pixels::Color) -> Model {
     for d in 0..divs {
         for i in 0..divs - 1 {
             let i0 = d*divs + i;
-            triangles.push(Triangle::new(i0 as usize, (i+divs+1) as usize, (i0+1) as usize, color));
-            triangles.push(Triangle::new(i0 as usize, (i+divs) as usize, (i0+divs+1)  as usize, color));
+            triangles.push(Triangle::new(i0 as usize, (i0+divs+1) as usize, (i0+1) as usize, color, vec![vertexes[i0 as usize], vertexes[(i0+divs+1) as usize], vertexes[(i0+1) as usize]]));
+            triangles.push(Triangle::new(i0 as usize, (i0+divs) as usize, (i0+divs+1)  as usize, color, vec![vertexes[i0 as usize], vertexes[(i0+divs) as usize], vertexes[(i0+divs+1) as usize]]));
         }
     }
 
@@ -115,10 +122,12 @@ struct Transform {
 struct Instance<'a> {
     model: &'a Model,
     transform: Coords,
+    orientation: Coords
 }
 
 impl Instance<'_> {
     pub fn new(model: &Model, transform: Transform) -> Instance {
+
         let m = multiply_matrices(
             &matrix_translate(&transform.translation),
             &multiply_matrices(&transform.rotation, &matrix_scale(transform.scale)),
@@ -130,6 +139,7 @@ impl Instance<'_> {
         return Instance {
             model: model,
             transform: m,
+            orientation: transform.rotation
         };
     }
 }
@@ -408,7 +418,8 @@ fn render_triangle(canvas: &render::Canvas<video::Window>, db: &mut DepthBuffer,
     vertexes: &Vec<Point3D>,
     projected: &Vec<rect::Point>,
     camera: &Camera,
-    lights: &Vec<Light>
+    lights: &Vec<Light>,
+    orientation: Coords
  ) {
 
     let (i0, i1, i2) = sorted_vertex_indices(&triangle.indexes, projected);
@@ -422,10 +433,10 @@ fn render_triangle(canvas: &render::Canvas<video::Window>, db: &mut DepthBuffer,
     let to_triangle_center = vertexes[triangle.indexes[0]].add(&vertexes[triangle.indexes[0]]).add(&vertexes[triangle.indexes[0]]).multiply(-1.0/3.0);
 
     // - determine if angle from camera is greater than 90 degrees
-    if dot_product(&to_triangle_center, &normal) < 0.0 {
-        println!("back face detected");
-        return
-    }
+    // if dot_product(&to_triangle_center, &normal) < 0.0 {
+    //     println!("back face detected");
+    //     return
+    // }
 
     // flat shading: intensity from center
     // let center = Point3D::new(
@@ -444,15 +455,15 @@ fn render_triangle(canvas: &render::Canvas<video::Window>, db: &mut DepthBuffer,
     let (iz01, iz012) = edge_interpolate(p0.y, 1.0 / v0.z, p1.y, 1.0 / v1.z, p2.y, 1.0 / v2.z);
 
     // use vertex normals
-    // let transform = multiply_matrices(&transpose_matrix(&camera.orientation), &orientation);
-    // let normal0 = matrix_multiply_vector(triangle.normals[i0], transform);
-    // let normal1 = matrix_multiply_vector(triangle.normals[i1], transform);
-    // let normal2 = matrix_multiply_vector(triangle.normals[i2], transform);
+    let transform = multiply_matrices(&transpose_matrix(&camera.orientation), &orientation);
+    let normal0 = matrix_multiply_vector(&triangle.normals[i0 as usize], transform);
+    let normal1 = matrix_multiply_vector(&triangle.normals[i1 as usize], transform);
+    let normal2 = matrix_multiply_vector(&triangle.normals[i2 as usize], transform);
 
     // gouraud shading: get lighting at triangle vertices:
-    let l0 = compute_lighting(v0, normal, camera, lights);
-    let l1 = compute_lighting(v1, normal, camera, lights);
-    let l2 = compute_lighting(v2, normal, camera, lights);
+    let l0 = compute_lighting(v0, normal0, camera, lights);
+    let l1 = compute_lighting(v1, normal1, camera, lights);
+    let l2 = compute_lighting(v2, normal2, camera, lights);
 
     println!("{} {} {} triangle vertices {} {} {} lighting {} {} {}", triangle.color.r, triangle.color.g, triangle.color.b, triangle.indexes[i0], triangle.indexes[i1], triangle.indexes[i2], l0, l1, l2);
 
@@ -467,6 +478,11 @@ fn render_triangle(canvas: &render::Canvas<video::Window>, db: &mut DepthBuffer,
     let mut iz_right = iz012;
     let mut l_left = l01;
     let mut l_right = l012;
+    println!("Interpolated edges lengths {} {}", x_left.len(), x_right.len());
+    if (x_left.len() == 0) {
+        println!("skipped!");
+        return;
+    }
 	let m = x_right.len() / 2;
 	if x_right[m] < x_left[m] {
 		std::mem::swap(& mut x_left, & mut x_right);
@@ -516,7 +532,7 @@ fn render_triangle(canvas: &render::Canvas<video::Window>, db: &mut DepthBuffer,
 //     return v3;
 // }
 
-fn render_instance(canvas: &render::Canvas<video::Window>, depth_buffer: &mut DepthBuffer, model: &Model, camera: &Camera, lights: &Vec<Light>) -> () {
+fn render_instance(canvas: &render::Canvas<video::Window>, depth_buffer: &mut DepthBuffer, model: &Model, camera: &Camera, lights: &Vec<Light>, orientation: Coords) -> () {
     let projected = model
         .vertexes
         .iter()
@@ -526,7 +542,7 @@ fn render_instance(canvas: &render::Canvas<video::Window>, depth_buffer: &mut De
         .collect();
 
     for t in &model.triangles {
-        render_triangle(canvas, depth_buffer, t, &model.vertexes, &projected, camera, lights);
+        render_triangle(canvas, depth_buffer, t, &model.vertexes, &projected, camera, lights, orientation);
     }
 }
 
@@ -606,12 +622,12 @@ fn render_scene(
     let translation = matrix_translate(&Point3D::new(-1.0 * pos.x, -1.0 * pos.y, -1.0 * pos.z));
     let camera_matrix = multiply_matrices(&rotation, &translation);
     let mut depth_buffer: DepthBuffer = [0.0; (SCREEN_HEIGHT*SCREEN_WIDTH) as usize];
-
+    let orientation = instances[0 as usize].orientation;
     for i in instances {
         let transform = multiply_matrices(&camera_matrix, &i.transform);
         /* camera.clipping_planes */
         match transform_and_clip(&camera.clipping_planes, i.model, transform) {
-        	Some(m) => render_instance(canvas, &mut depth_buffer, &m, camera, lights),
+        	Some(m) => render_instance(canvas, &mut depth_buffer, &m, camera, lights, orientation),
         	None => {}
         }
 
@@ -657,18 +673,18 @@ fn main() -> Result<(), String> {
     let cyan = pixels::Color::RGB(0, 255, 255);
 
     let triangles = vec![
-        Triangle::new(0, 1, 2, red),
-        Triangle::new(0, 2, 3, red),
-        Triangle::new(4, 0, 3, green),
-        Triangle::new(4, 3, 7, green),
-        Triangle::new(5, 4, 7, blue),
-        Triangle::new(5, 7, 6, blue),
-        Triangle::new(1, 5, 6, yellow),
-        Triangle::new(1, 6, 2, yellow),
-        Triangle::new(4, 5, 1, purple),
-        Triangle::new(4, 1, 0, purple),
-        Triangle::new(2, 6, 7, cyan),
-        Triangle::new(2, 7, 3, cyan),
+        Triangle::new(0, 1, 2, red,    vec![Point3D::new(0.0, 0.0, 1.0), Point3D::new(0.0, 0.0, 1.0), Point3D::new(0.0, 0.0, 1.0)]),
+        Triangle::new(0, 2, 3, red,    vec![Point3D::new(0.0, 0.0, 1.0), Point3D::new(0.0, 0.0, 1.0), Point3D::new(0.0, 0.0, 1.0)]),
+        Triangle::new(4, 0, 3, green,  vec![Point3D::new(1.0, 0.0, 0.0), Point3D::new(1.0, 0.0, 0.0), Point3D::new(1.0, 0.0, 0.0)]),
+        Triangle::new(4, 3, 7, green,  vec![Point3D::new(1.0, 0.0, 0.0), Point3D::new(1.0, 0.0, 0.0), Point3D::new(1.0, 0.0, 0.0)]),
+        Triangle::new(5, 4, 7, blue,   vec![Point3D::new(0.0, 0.0, -1.0), Point3D::new(0.0, 0.0, -1.0), Point3D::new(0.0, 0.0, -1.0)]),
+        Triangle::new(5, 7, 6, blue,   vec![Point3D::new(0.0, 0.0, -1.0), Point3D::new(0.0, 0.0, -1.0), Point3D::new(0.0, 0.0, -1.0)]),
+        Triangle::new(1, 5, 6, yellow, vec![Point3D::new(-1.0, 0.0, 0.0), Point3D::new(-1.0, 0.0, 0.0), Point3D::new(-1.0, 0.0, 0.0)]),
+        Triangle::new(1, 6, 2, yellow, vec![Point3D::new(-1.0, 0.0, 0.0), Point3D::new(-1.0, 0.0, 0.0), Point3D::new(-1.0, 0.0, 0.0)]),
+        Triangle::new(1, 0, 5, purple, vec![Point3D::new(0.0, 1.0, 0.0), Point3D::new(0.0, 1.0, 0.0), Point3D::new(0.0, 1.0, 0.0)]),
+        Triangle::new(5, 0, 4, purple, vec![Point3D::new(0.0, 1.0, 0.0), Point3D::new(0.0, 1.0, 0.0), Point3D::new(0.0, 1.0, 0.0)]),
+        Triangle::new(2, 6, 7, cyan,   vec![Point3D::new(0.0, -1.0, 0.0), Point3D::new(0.0, -1.0, 0.0), Point3D::new(0.0, -1.0, 0.0)]),
+        Triangle::new(2, 7, 3, cyan,   vec![Point3D::new(0.0, -1.0, 0.0), Point3D::new(0.0, -1.0, 0.0), Point3D::new(0.0, -1.0, 0.0)])
     ];
 
     let cube = Model {
@@ -718,7 +734,7 @@ fn main() -> Result<(), String> {
     ];
 
     let camera = Camera {
-        position: Point3D::new(-3.0, 1.0, 2.0),
+        position: Point3D::new(-1.0, 1.0, -2.0),
         orientation: matrix_rotation_y(-30.0),
         clipping_planes: clipping_planes
     };
@@ -729,7 +745,7 @@ fn main() -> Result<(), String> {
         Light::Point { intensity: 0.2, position: Point3D::new(-3.0, 2.0, -10.0)}
     ];
 
-    render_scene(&canvas, &camera, vec![cube1, cube2], &lights);
+    render_scene(&canvas, &camera, vec![cube1, cube2, sphere1], &lights);
 
     canvas.present();
 
