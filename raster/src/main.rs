@@ -7,6 +7,7 @@ use sdl2::pixels;
 use sdl2::rect;
 use sdl2::render;
 use sdl2::video;
+use std::fmt;
 
 const SCREEN_WIDTH: i32 = 600;
 const SCREEN_HEIGHT: i32 = 600;
@@ -24,7 +25,7 @@ type Coords = [[f32; 4]; 4];
 
 type DepthBuffer = [f32; (SCREEN_HEIGHT*SCREEN_WIDTH) as usize];
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct Point3D {
     pub x: f32,
     pub y: f32,
@@ -42,6 +43,12 @@ impl Point3D {
 
     pub fn add(&self, v: &Point3D) -> Point3D {
         return Point3D {x: self.x + v.x, y: self.y + v.y, z: self.z + v.z};
+    }
+}
+
+impl fmt::Display for Point3D {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({}, {}, {})", self.x, self.y, self.z)
     }
 }
 
@@ -85,12 +92,12 @@ fn generate_sphere(divs: i32, color: pixels::Color) -> Model {
     for d in 0..divs+1 {
         let y = (2.0 / divs as f32) * (d as f32 - (divs as f32)/2.0);
         let radius = (1.0 - y*y).sqrt();
-        println!("generate sphere at height {}", y);
+        // println!("generate sphere at height {}", y);
         for i in 0..divs {
             let x = radius * ((i as f32 * delta_angle).cos());
             let z = radius * ((i as f32 * delta_angle).sin());
             let vertex = Point3D::new(x, y, z);
-            println!("adding vertex {} {} {}", vertex.x, vertex.y, vertex.z);
+            // println!("adding vertex {} {} {}", vertex.x, vertex.y, vertex.z);
             vertexes.push(vertex);
         }
     }
@@ -433,10 +440,12 @@ fn render_triangle(canvas: &render::Canvas<video::Window>, db: &mut DepthBuffer,
     let to_triangle_center = vertexes[triangle.indexes[0]].add(&vertexes[triangle.indexes[0]]).add(&vertexes[triangle.indexes[0]]).multiply(-1.0/3.0);
 
     // - determine if angle from camera is greater than 90 degrees
-    // if dot_product(&to_triangle_center, &normal) < 0.0 {
-    //     println!("back face detected");
-    //     return
-    // }
+    let angle_to_normal = dot_product(&to_triangle_center, &normal);
+    println!("normal {} center {} angle {}", normal, to_triangle_center, angle_to_normal);
+    if angle_to_normal < 0.0 {
+        println!("back face detected");
+        return
+    }
 
     // flat shading: intensity from center
     // let center = Point3D::new(
@@ -478,9 +487,9 @@ fn render_triangle(canvas: &render::Canvas<video::Window>, db: &mut DepthBuffer,
     let mut iz_right = iz012;
     let mut l_left = l01;
     let mut l_right = l012;
-    println!("Interpolated edges lengths {} {}", x_left.len(), x_right.len());
-    if (x_left.len() == 0) {
-        println!("skipped!");
+    // println!("Interpolated edges lengths {} {}", x_left.len(), x_right.len());
+    if x_left.len() == 0 {
+        println!("Skipped triangle - edge length 0!");
         return;
     }
 	let m = x_right.len() / 2;
